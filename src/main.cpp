@@ -74,6 +74,8 @@ bool remove_grid;
 bool render_objects_over_pipes;
 float image_scale = 1.0f;
 
+std::string initial_level_path;
+
 GLuint background_image;
 int background_image_width  = 0;
 int background_image_height = 0;
@@ -990,43 +992,53 @@ int main(int argc, char** argv) {
 				image_scale = result["scale"].as<float>();
 			}
 
-			if(!overworldImage.empty() || !subworldImage.empty()) {
-				LevelHandler data = AttemptRender(path, result.count("debug"), overworldImage, subworldImage);
-				if(data.overworld) {
-					delete data.overworld;
-					delete data.subworld;
+			// Check if any output options are specified
+			bool hasOutputOptions = !overworldImage.empty() || !subworldImage.empty() ||
+				result.count("overworldJson") || result.count("subworldJson");
+
+			if(!hasOutputOptions) {
+				// No output options - store path to open in GUI
+				initial_level_path = path;
+			} else {
+				// Output options specified - do batch rendering and exit
+				if(!overworldImage.empty() || !subworldImage.empty()) {
+					LevelHandler data = AttemptRender(path, result.count("debug"), overworldImage, subworldImage);
+					if(data.overworld) {
+						delete data.overworld;
+						delete data.subworld;
+					}
+					if(data.subworld) {
+						delete data.drawerOverworld;
+						delete data.drawerSubworld;
+					}
 				}
-				if(data.subworld) {
-					delete data.drawerOverworld;
-					delete data.drawerSubworld;
+
+				LevelHandler data;
+				if(result.count("overworldJson") || result.count("subworldJson")) {
+					data = AttemptRender(path, result.count("debug"), "instructionsOnly", "instructionsOnly");
 				}
+
+				if(result.count("overworldJson")) {
+					data.overworld->ExportToJSON(
+						result["overworldJson"].as<std::string>(), data.drawerOverworld->GetInstructions());
+				}
+
+				if(result.count("subworldJson")) {
+					data.subworld->ExportToJSON(
+						result["subworldJson"].as<std::string>(), data.drawerSubworld->GetInstructions());
+				}
+
+				delete data.overworld;
+				delete data.subworld;
+				delete data.drawerOverworld;
+				delete data.drawerSubworld;
+
+				if(result.count("code")) {
+					std::filesystem::remove(path);
+				}
+
+				return 0;
 			}
-
-			LevelHandler data;
-			if(result.count("overworldJson") || result.count("subworldJson")) {
-				data = AttemptRender(path, result.count("debug"), "instructionsOnly", "instructionsOnly");
-			}
-
-			if(result.count("overworldJson")) {
-				data.overworld->ExportToJSON(
-					result["overworldJson"].as<std::string>(), data.drawerOverworld->GetInstructions());
-			}
-
-			if(result.count("subworldJson")) {
-				data.subworld->ExportToJSON(
-					result["subworldJson"].as<std::string>(), data.drawerSubworld->GetInstructions());
-			}
-
-			delete data.overworld;
-			delete data.subworld;
-			delete data.drawerOverworld;
-			delete data.drawerSubworld;
-
-			if(result.count("code")) {
-				std::filesystem::remove(path);
-			}
-
-			return 0;
 		} else {
 			fmt::print("Path {} does not exist\n", path);
 			return 1;
@@ -1148,6 +1160,14 @@ int main(int argc, char** argv) {
 	auto stop = std::chrono::high_resolution_clock::now();
 	fmt::print(
 		"Startup took {} milliseconds\n", std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count());
+
+	// Load initial level if specified via command line
+	if(!initial_level_path.empty()) {
+		fmt::print("Loading level from command line: {}\n", initial_level_path);
+		AttemptRender(initial_level_path, false,
+			fmt::format("{}/{}overworld.png", assetsFolder, std::filesystem::path(initial_level_path).stem().string()),
+			fmt::format("{}/{}subworld.png", assetsFolder, std::filesystem::path(initial_level_path).stem().string()));
+	}
 
 #ifdef __EMSCRIPTEN__
 	EM_ASM({ Module.showLoading = false; });
