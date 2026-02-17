@@ -36,6 +36,8 @@ public:
 	std::vector<DrawingInstruction>& GetInstructions();
 	int GetWidth();
 	int GetHeight();
+	int GetH() const { return H; }
+	int GetZm() const { return Zm; }
 	void ClearImageCache();
 	void DrawGridlines();
 	cairo_pattern_t* GetCachedTile(int x, int y, int w, int h);

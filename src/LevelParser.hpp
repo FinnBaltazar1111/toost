@@ -101,18 +101,19 @@ public:
 	};
 
 	struct MapObject {
-		int32_t X        = 0;
-		int32_t Y        = 0;
-		uint8_t W        = 0;
-		uint8_t H        = 0;
-		int32_t Flag     = 0;
-		int32_t CFlag    = 0;
-		int32_t Ex       = 0;
-		int16_t ID       = 0;
-		int16_t CID      = 0;
-		int16_t LID      = 0;
-		int16_t SID      = 0;
-		uint8_t LinkType = 0;
+		int32_t X             = 0;
+		int32_t Y             = 0;
+		uint8_t W             = 0;
+		uint8_t H             = 0;
+		int32_t Flag          = 0;
+		int32_t CFlag         = 0;
+		int32_t Ex            = 0;
+		int16_t ID            = 0;
+		int16_t CID           = 0;
+		int16_t LID           = 0;
+		int16_t SID           = 0;
+		uint8_t LinkType      = 0;
+		int32_t OriginalIndex = 0;
 	};
 
 	struct MapGround {
@@ -214,10 +215,31 @@ public:
 	std::vector<std::vector<std::vector<ObjStr>>> ObjLocData;
 	bool isOverworld;
 
+	std::string rawLevelData;
+
+	// Binary layout constants
+	static constexpr size_t LEVEL_HEADER_SIZE = 0x200;
+	static constexpr size_t MAP_HEADER_SIZE   = 0x48;
+	static constexpr size_t OBJ_RECORD_SIZE   = 0x20;
+	static constexpr size_t MAX_OBJECTS        = 2600;
+	static constexpr size_t OBJ_ID_OFFSET      = 0x18;
+	static constexpr size_t OBJ_CID_OFFSET     = 0x1A;
+	static constexpr size_t OBJ_X_OFFSET       = 0x00;
+	static constexpr size_t OBJ_Y_OFFSET       = 0x04;
+	static constexpr size_t MAP_OBJ_COUNT_OFFSET = 0x20;
+	static constexpr size_t MAP_SIZE           = 0x2DEE0;
+
 	LevelParser();
 	static bool DecryptLevelData(std::string& input, std::string& output);
+	static bool EncryptLevelData(std::string& input, std::string& output);
 	void LoadLevelData(const std::string& levelData, bool overworld);
 	void ExportToJSON(const std::string& outputPath, std::vector<DrawingInstruction>& drawingInstructions);
+
+	size_t GetMapOffset() const;
+	size_t GetObjectOffset(int originalIndex) const;
+	void ModifyObject(int mapObjIndex, int16_t newID, int16_t newCID);
+	void AddObject(int32_t x, int32_t y, int16_t id, int16_t cid);
+	void RemoveObject(int mapObjIndex);
 };
 
 extern const char* ObjEng[];

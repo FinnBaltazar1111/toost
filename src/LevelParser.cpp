@@ -34,10 +34,106 @@ bool LevelParser::DecryptLevelData(std::string& input, std::string& output) {
 	return LevelDecryptor::decrypt(input, output);
 }
 
+bool LevelParser::EncryptLevelData(std::string& input, std::string& output) {
+	return LevelDecryptor::encrypt(input, output);
+}
+
+size_t LevelParser::GetMapOffset() const {
+	return LEVEL_HEADER_SIZE + (isOverworld ? 0 : MAP_SIZE);
+}
+
+size_t LevelParser::GetObjectOffset(int originalIndex) const {
+	return GetMapOffset() + MAP_HEADER_SIZE + (size_t)originalIndex * OBJ_RECORD_SIZE;
+}
+
+void LevelParser::ModifyObject(int mapObjIndex, int16_t newID, int16_t newCID) {
+	if(mapObjIndex < 0 || mapObjIndex >= (int)MapObj.size()) return;
+
+	auto& obj = MapObj[mapObjIndex];
+	obj.ID    = newID;
+	obj.CID   = newCID;
+
+	size_t objOffset = GetObjectOffset(obj.OriginalIndex);
+	memcpy(&rawLevelData[objOffset + OBJ_ID_OFFSET], &newID, 2);
+	memcpy(&rawLevelData[objOffset + OBJ_CID_OFFSET], &newCID, 2);
+}
+
+void LevelParser::AddObject(int32_t x, int32_t y, int16_t id, int16_t cid) {
+	if(MapHdr.ObjCount >= (int)MAX_OBJECTS) return;
+
+	int newOriginalIndex = MapHdr.ObjCount;
+	MapHdr.ObjCount++;
+
+	// Update object count in raw buffer
+	size_t mapOffset = GetMapOffset();
+	int32_t newCount = MapHdr.ObjCount;
+	memcpy(&rawLevelData[mapOffset + MAP_OBJ_COUNT_OFFSET], &newCount, 4);
+
+	// Write the new object record into the raw buffer
+	size_t objOffset = GetObjectOffset(newOriginalIndex);
+	memset(&rawLevelData[objOffset], 0, OBJ_RECORD_SIZE);
+	memcpy(&rawLevelData[objOffset + OBJ_X_OFFSET], &x, 4);
+	memcpy(&rawLevelData[objOffset + OBJ_Y_OFFSET], &y, 4);
+	// width=1, height=1 at offsets 0x0A, 0x0B
+	rawLevelData[objOffset + 0x0A] = 1;
+	rawLevelData[objOffset + 0x0B] = 1;
+	memcpy(&rawLevelData[objOffset + OBJ_ID_OFFSET], &id, 2);
+	memcpy(&rawLevelData[objOffset + OBJ_CID_OFFSET], &cid, 2);
+
+	// Add to parsed objects
+	MapObject newObj;
+	newObj.X             = x;
+	newObj.Y             = y;
+	newObj.W             = 1;
+	newObj.H             = 1;
+	newObj.ID            = id;
+	newObj.CID           = cid;
+	newObj.OriginalIndex = newOriginalIndex;
+	MapObj.push_back(newObj);
+}
+
+void LevelParser::RemoveObject(int mapObjIndex) {
+	if(mapObjIndex < 0 || mapObjIndex >= (int)MapObj.size()) return;
+	if(MapHdr.ObjCount <= 0) return;
+
+	int origIdx = MapObj[mapObjIndex].OriginalIndex;
+
+	// Move the last object in the binary array to fill the gap
+	int lastOrigIdx = MapHdr.ObjCount - 1;
+	if(origIdx != lastOrigIdx) {
+		size_t dstOffset = GetObjectOffset(origIdx);
+		size_t srcOffset = GetObjectOffset(lastOrigIdx);
+		memcpy(&rawLevelData[dstOffset], &rawLevelData[srcOffset], OBJ_RECORD_SIZE);
+
+		// Update OriginalIndex of the moved object in MapObj
+		for(auto& obj : MapObj) {
+			if(obj.OriginalIndex == lastOrigIdx) {
+				obj.OriginalIndex = origIdx;
+				break;
+			}
+		}
+	}
+
+	// Zero out the last slot
+	size_t lastOffset = GetObjectOffset(lastOrigIdx);
+	memset(&rawLevelData[lastOffset], 0, OBJ_RECORD_SIZE);
+
+	MapHdr.ObjCount--;
+
+	// Update object count in raw buffer
+	size_t mapOffset = GetMapOffset();
+	int32_t newCount = MapHdr.ObjCount;
+	memcpy(&rawLevelData[mapOffset + MAP_OBJ_COUNT_OFFSET], &newCount, 4);
+
+	// Remove from parsed objects
+	MapObj.erase(MapObj.begin() + mapObjIndex);
+}
+
 void LevelParser::LoadLevelData(const std::string& levelData, bool overworld) {
-	isOverworld = overworld;
-	long long i = 0;
-	long long j = 0;
+	rawLevelData = levelData;
+	isOverworld  = overworld;
+	long long i  = 0;
+	long long j  = 0;
 
 	kaitai::kstream ks(levelData);
 	MM2::level_t level(&ks);
@@ -111,7 +207,8 @@ void LevelParser::LoadLevelData(const std::string& levelData, bool overworld) {
 		newObject.CID      = obj_ref.cid();
 		newObject.LID      = obj_ref.lid();
 		newObject.SID      = obj_ref.sid();
-		newObject.LinkType = 0;
+		newObject.LinkType      = 0;
+		newObject.OriginalIndex = i;
 
 		if(newObject.X > max_x) {
 			max_x = newObject.X;
@@ -528,7 +625,7 @@ void LevelParser::ExportToJSON(const std::string& outputPath, std::vector<Drawin
 	for(auto& obj : MapObj) {
 		writer.StartObject();
 		writer.Key("name");
-		writer.String(ObjEng[obj.ID]);
+		writer.String((obj.ID >= 0 && obj.ID < 133) ? ObjEng[obj.ID] : "Unknown");
 		writer.Key("x");
 		writer.Int(obj.X);
 		writer.Key("y");

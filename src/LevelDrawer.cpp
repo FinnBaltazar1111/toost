@@ -260,7 +260,11 @@ cairo_pattern_t* LevelDrawer::GetCachedPattern(int id) {
 	if(patternCache.count(id)) {
 		return patternCache[id];
 	} else {
-		const auto sprite = LevelData::ObjectLocation.at(id);
+		auto it = LevelData::ObjectLocation.find(id);
+		if(it == LevelData::ObjectLocation.end()) {
+			return nullptr;
+		}
+		const auto sprite = it->second;
 		cairo_surface_t* subsurface
 			= cairo_surface_create_for_rectangle(spritesheet, sprite.x, sprite.y, sprite.width, sprite.height);
 		cairo_pattern_t* pattern = cairo_pattern_create_for_surface(subsurface);
@@ -312,7 +316,7 @@ void LevelDrawer::DrawImage(uint32_t id, int x, int y, int targetWidth, int targ
 		cairo_pattern_t* pattern = GetCachedPattern(id);
 
 		if(pattern) {
-			const auto sprite = LevelData::ObjectLocation.at(id);
+			const auto sprite = LevelData::ObjectLocation.find(id)->second;
 
 			cairo_translate(cr, (double)x, (double)y);
 			cairo_scale(cr, (double)targetWidth / sprite.width, (double)targetHeight / sprite.height);
@@ -345,7 +349,7 @@ void LevelDrawer::DrawImageOpacity(uint32_t id, double opacity, int x, int y, in
 		cairo_pattern_t* pattern = GetCachedPattern(id);
 
 		if(pattern) {
-			const auto sprite = LevelData::ObjectLocation.at(id);
+			const auto sprite = LevelData::ObjectLocation.find(id)->second;
 
 			cairo_translate(cr, (double)x, (double)y);
 			cairo_scale(cr, (double)targetWidth / sprite.width, (double)targetHeight / sprite.height);
@@ -378,7 +382,7 @@ void LevelDrawer::DrawImageRotate(uint32_t id, double angle, int x, int y, int t
 		cairo_pattern_t* pattern = GetCachedPattern(id);
 
 		if(pattern) {
-			const auto sprite = LevelData::ObjectLocation.at(id);
+			const auto sprite = LevelData::ObjectLocation.find(id)->second;
 
 			cairo_translate(cr, (double)x + (targetWidth / 2), (double)y + (targetHeight / 2));
 			cairo_rotate(cr, angle);
@@ -414,7 +418,7 @@ void LevelDrawer::DrawImageRotateOpacity(
 		cairo_pattern_t* pattern = GetCachedPattern(id);
 
 		if(pattern) {
-			const auto sprite = LevelData::ObjectLocation.at(id);
+			const auto sprite = LevelData::ObjectLocation.find(id)->second;
 
 			cairo_translate(cr, (double)x + (targetWidth / 2), (double)y + (targetHeight / 2));
 			cairo_rotate(cr, angle);

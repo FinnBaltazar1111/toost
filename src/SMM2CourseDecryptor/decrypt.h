@@ -21,5 +21,9 @@ namespace LevelDecryptor {
 
 	void gen_key(uint32_t* key_table, uint32_t* out_key, uint32_t* rand_state);
 
+	void aes_cmac(const uint8_t* key, const uint8_t* data, size_t length, uint8_t* mac);
+
 	bool decrypt(std::string& input, std::string& output);
+
+	bool encrypt(std::string& input, std::string& output);
 };

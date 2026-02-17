@@ -95,6 +95,7 @@ struct LevelWindow {
 	GLuint level_render_image = 0;
 	LevelParser* parser;
 	LevelDrawer* drawer;
+	std::string rawLevelData;
 };
 
 struct LevelHandler {
@@ -102,12 +103,13 @@ struct LevelHandler {
 	LevelParser* subworld        = nullptr;
 	LevelDrawer* drawerOverworld = nullptr;
 	LevelDrawer* drawerSubworld  = nullptr;
+	std::string rawLevelData;
 };
 
 std::vector<LevelWindow> opened_level_windows;
 bool started_level_windows = false;
 
-LevelDrawer* DrawMap(LevelParser* level, bool isOverworld, bool log, std::string destination) {
+LevelDrawer* DrawMap(LevelParser* level, bool isOverworld, bool log, std::string destination, const std::string& rawData = "") {
 	LevelDrawer* drawer = new LevelDrawer(*level, 16);
 
 	drawer->Setup();
@@ -272,11 +274,12 @@ LevelDrawer* DrawMap(LevelParser* level, bool isOverworld, bool log, std::string
 			LevelWindow newLevelWindow;
 			Helpers::LoadTextureFromSurface(surface, &newLevelWindow.level_render_image,
 				&newLevelWindow.level_render_width, &newLevelWindow.level_render_height);
-			newLevelWindow.filename  = destination;
-			newLevelWindow.name      = std::filesystem::path(destination).stem().string();
-			newLevelWindow.window_id = new_window_counter;
-			newLevelWindow.parser    = level;
-			newLevelWindow.drawer    = drawer;
+			newLevelWindow.filename     = destination;
+			newLevelWindow.name         = std::filesystem::path(destination).stem().string();
+			newLevelWindow.window_id    = new_window_counter;
+			newLevelWindow.parser       = level;
+			newLevelWindow.drawer       = drawer;
+			newLevelWindow.rawLevelData = rawData;
 			opened_level_windows.push_back(newLevelWindow);
 			new_window_counter++;
 		}
@@ -350,12 +353,13 @@ LevelHandler AttemptRender(
 		}
 
 		LevelHandler data;
+		data.rawLevelData = content;
 
 		if(!destinationOverworld.empty()) {
 			LevelParser* overworldLevelParser = new LevelParser();
 			overworldLevelParser->LoadLevelData(content, true);
 			auto start           = std::chrono::high_resolution_clock::now();
-			data.drawerOverworld = DrawMap(overworldLevelParser, true, log, destinationOverworld);
+			data.drawerOverworld = DrawMap(overworldLevelParser, true, log, destinationOverworld, content);
 			auto stop            = std::chrono::high_resolution_clock::now();
 			fmt::print("Rendering overworld took {} milliseconds\n",
 				std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count());
@@ -366,7 +370,7 @@ LevelHandler AttemptRender(
 			LevelParser* subworldLevelParser = new LevelParser();
 			subworldLevelParser->LoadLevelData(content, false);
 			auto start          = std::chrono::high_resolution_clock::now();
-			data.drawerSubworld = DrawMap(subworldLevelParser, false, log, destinationSubworld);
+			data.drawerSubworld = DrawMap(subworldLevelParser, false, log, destinationSubworld, content);
 			auto stop           = std::chrono::high_resolution_clock::now();
 			fmt::print("Rendering subworld took {} milliseconds\n",
 				std::chrono::duration_cast<std::chrono::milliseconds>(stop - start).count());
@@ -523,6 +527,54 @@ void level_downloading_thread() {
 		download_level_mutex.unlock();
 #endif
 	}
+}
+
+static const int ObjEngCount = 133;
+
+static const char* SafeObjName(int id) {
+	if(id >= 0 && id < ObjEngCount) return ObjEng[id];
+	return "Unknown";
+}
+
+static void ReRenderWindow(int window_index) {
+	if(window_index < 0 || window_index >= (int)opened_level_windows.size()) return;
+	if(opened_level_windows[window_index].parser->rawLevelData.empty()) return;
+
+	std::string rawData  = opened_level_windows[window_index].parser->rawLevelData;
+	bool isOverworld     = opened_level_windows[window_index].parser->isOverworld;
+	std::string filename = opened_level_windows[window_index].filename;
+
+	LevelParser* newParser = new LevelParser();
+	newParser->LoadLevelData(rawData, isOverworld);
+
+	// Prevent DrawMap from pushing a new LevelWindow
+	bool savedStarted     = started_level_windows;
+	started_level_windows = false;
+	LevelDrawer* newDrawer = DrawMap(newParser, isOverworld, false, filename, rawData);
+	started_level_windows = savedStarted;
+
+	// Load the texture from the PNG that DrawMap just wrote
+	cairo_surface_t* pngSurface = cairo_image_surface_create_from_png(filename.c_str());
+	GLuint newTexture           = 0;
+	int newWidth                = 0;
+	int newHeight               = 0;
+	Helpers::LoadTextureFromSurface(pngSurface, &newTexture, &newWidth, &newHeight);
+	cairo_surface_destroy(pngSurface);
+
+	// Clean up old resources
+	delete opened_level_windows[window_index].parser;
+	delete opened_level_windows[window_index].drawer;
+	glDeleteTextures(1, &opened_level_windows[window_index].level_render_image);
+
+	// Replace with new resources
+	opened_level_windows[window_index].parser              = newParser;
+	opened_level_windows[window_index].drawer              = newDrawer;
+	opened_level_windows[window_index].level_render_image  = newTexture;
+	opened_level_windows[window_index].level_render_width  = newWidth;
+	opened_level_windows[window_index].level_render_height = newHeight;
+	opened_level_windows[window_index].rawLevelData        = rawData;
+
+	cached_focused_window_index = -1;
 }
 
 static void main_loop() {
@@ -749,6 +801,52 @@ static void main_loop() {
 #endif
 		}
 
+		if(ImGui::Button("Export BCD")) {
+			LevelWindow& selected_level_info = opened_level_windows[focused_window_index];
+			if(!selected_level_info.rawLevelData.empty()) {
+				std::string encrypted;
+				if(LevelParser::EncryptLevelData(selected_level_info.parser->rawLevelData, encrypted)) {
+#ifdef __EMSCRIPTEN__
+					std::string dest = fmt::format("{}/{}.bcd", assetsFolder, selected_level_info.name);
+					std::string name = selected_level_info.name + ".bcd";
+					auto destination_file = std::fstream(dest, std::ios::out | std::ios::binary);
+					destination_file.write(encrypted.data(), encrypted.size());
+					destination_file.close();
+					EM_ASM(
+						{
+							var filenameToDownload = UTF8ToString($0, $1);
+							var buf                = FS.readFile(filenameToDownload, { encoding: "binary" });
+							var fileBlob           = new Blob([buf.buffer], {
+								type:
+									"application/octet-stream"
+							});
+							saveAs(fileBlob, UTF8ToString($2, $3));
+						},
+						dest.c_str(), dest.size(), name.c_str(), name.size());
+#else
+					auto selection = pfd::save_file(
+						"Choose BCD destination", selected_level_info.name + ".bcd", { "BCD File", ".bcd" }, pfd::opt::none)
+									     .result();
+					if(!selection.empty()) {
+						fmt::print("Saving BCD to {}\n", selection);
+						auto destination_file = std::fstream(selection, std::ios::out | std::ios::binary);
+						destination_file.write(encrypted.data(), encrypted.size());
+						destination_file.close();
+						popup_text           = "BCD exported successfully";
+						remaining_popup_time = 120;
+					}
+#endif
+				} else {
+					popup_text           = "Failed to encrypt level data";
+					remaining_popup_time = 120;
+				}
+			}
+		}
+
+		if(ImGui::Button("Re-render")) {
+			ReRenderWindow(focused_window_index);
+		}
+
 		close_current_level = ImGui::Button("Close Window");
 
 		if(focused_window_index != cached_focused_window_index) {
@@ -758,37 +856,46 @@ static void main_loop() {
 			cached_focused_window_index = focused_window_index;
 
 			LevelParser& level = *opened_level_windows[focused_window_index].parser;
+
+			// Safe map lookup that returns "Unknown" for missing keys
+			auto safeLookup = [](const auto& map, auto key) -> std::string {
+				auto it = map.find(key);
+				return it != map.end() ? it->second : "Unknown";
+			};
+
 			cwfi.reserve(50);
 			cwfi.push_back(std::string("Name: ") + level.LH.Name);
 			cwfi.push_back(std::string("Description: ") + level.LH.Desc);
-			cwfi.push_back(std::string("Gamestyle: ") + levelMappings->NumToGameStyle.at(level.LH.GameStyle));
-			cwfi.push_back(std::string("Theme: ") + levelMappings->NumToTheme.at(level.MapHdr.Theme));
+			cwfi.push_back(std::string("Gamestyle: ") + safeLookup(levelMappings->NumToGameStyle, level.LH.GameStyle));
+			cwfi.push_back(std::string("Theme: ") + safeLookup(levelMappings->NumToTheme, level.MapHdr.Theme));
 			cwfi.push_back(std::string("Is Overworld: ") + (level.isOverworld ? "yes" : "no"));
 			cwfi.push_back(std::string("Is Night Time: ") + (level.MapHdr.Flag == 1 ? "yes" : "no"));
 			cwfi.push_back(std::string("Clear Time: ") + levelMappings->FormatMillisecondTime(level.LH.ClearTime));
 			cwfi.push_back(std::string("Clear Attempts: ") + std::to_string(level.LH.ClearAttempts));
-			cwfi.push_back(std::string("Game Version: ") + levelMappings->NumToGameVersion.at(level.LH.ClearVer));
+			cwfi.push_back(std::string("Game Version: ") + safeLookup(levelMappings->NumToGameVersion, level.LH.ClearVer));
 			// cwfi.push_back(fmt::format("Uploaded: {:02}-{:02}-{} {}:{:02}", level.LH.DateDD, level.LH.DateMM,
 			// 	level.LH.DateYY, level.LH.DateH, level.LH.DateM));
 			cwfi.push_back(std::string("Timer: ") + std::to_string(level.LH.Timer));
 			cwfi.push_back(std::string("Start Y: ") + std::to_string(level.LH.StartY));
 			cwfi.push_back(fmt::format("Goal X: {}", level.LH.GoalX / 10.0));
 			cwfi.push_back(std::string("Goal Y: ") + std::to_string(level.LH.GoalY));
-			std::string clear_condition
-				= fmt::format(levelMappings->NumToClearCondition.at(level.LH.ClearCRC), level.LH.ClearCA);
+			std::string ccFmt = safeLookup(levelMappings->NumToClearCondition, level.LH.ClearCRC);
+			std::string clear_condition;
+			try { clear_condition = fmt::format(ccFmt, level.LH.ClearCA); }
+			catch(...) { clear_condition = ccFmt; }
 			cwfi.push_back(std::string("Clear Condition: ") + clear_condition);
 			cwfi.push_back(std::string("Clear Condition Category: ")
-						   + levelMappings->NumToClearConditionCategory.at(level.LH.ClearCC));
+						   + safeLookup(levelMappings->NumToClearConditionCategory, level.LH.ClearCC));
 			cwfi.push_back(
-				std::string("Autoscroll Speed: ") + levelMappings->NumToAutoscrollSpeed.at(level.LH.AutoscrollSpd));
+				std::string("Autoscroll Speed: ") + safeLookup(levelMappings->NumToAutoscrollSpeed, level.LH.AutoscrollSpd));
 			cwfi.push_back(
-				std::string("Autoscroll Type: ") + levelMappings->NumToAutoscrollType.at(level.MapHdr.AutoscrollType));
-			cwfi.push_back(std::string("Orientation: ") + levelMappings->NumToOrientation.at(level.MapHdr.Ori));
+				std::string("Autoscroll Type: ") + safeLookup(levelMappings->NumToAutoscrollType, level.MapHdr.AutoscrollType));
+			cwfi.push_back(std::string("Orientation: ") + safeLookup(levelMappings->NumToOrientation, level.MapHdr.Ori));
 			cwfi.push_back(std::string("Liquid Start Height: ") + std::to_string(level.MapHdr.LiqSHeight));
 			cwfi.push_back(std::string("Liquid End Height: ") + std::to_string(level.MapHdr.LiqEHeight));
-			cwfi.push_back(std::string("Liquid Mode: ") + levelMappings->NumToLiquidMode.at(level.MapHdr.LiqMode));
-			cwfi.push_back(std::string("Liquid Speed: ") + levelMappings->NumToLiquidSpeed.at(level.MapHdr.LiqSpd));
-			cwfi.push_back(std::string("Boundary Type: ") + levelMappings->NumToBoundaryType.at(level.MapHdr.BorFlag));
+			cwfi.push_back(std::string("Liquid Mode: ") + safeLookup(levelMappings->NumToLiquidMode, level.MapHdr.LiqMode));
+			cwfi.push_back(std::string("Liquid Speed: ") + safeLookup(levelMappings->NumToLiquidSpeed, level.MapHdr.LiqSpd));
+			cwfi.push_back(std::string("Boundary Type: ") + safeLookup(levelMappings->NumToBoundaryType, level.MapHdr.BorFlag));
 			cwfi.push_back(std::string("Right Boundary: ") + std::to_string(level.MapHdr.BorR));
 			cwfi.push_back(std::string("Top Boundary: ") + std::to_string(level.MapHdr.BorT));
 			cwfi.push_back(std::string("Left Boundary: ") + std::to_string(level.MapHdr.BorL));
@@ -810,7 +917,7 @@ static void main_loop() {
 			cwfi.push_back("");
 			cwfi.push_back("Level Objects:");
 			for(auto& object : level.MapObj) {
-				cwfi.push_back(std::string("- ") + std::string(ObjEng[object.ID]));
+				cwfi.push_back(std::string("- ") + std::string(SafeObjName(object.ID)));
 				cwfi.push_back(fmt::format("    x: {}", object.X / 10.0));
 				cwfi.push_back(std::string("    y: ") + std::to_string(object.Y));
 			}
@@ -848,6 +955,97 @@ static void main_loop() {
 					ImVec2(iter->level_render_width, iter->level_render_height));
 				ImGui::SetWindowSize(
 					ImVec2((float)iter->level_render_width + 25.0f, (float)iter->level_render_height + 45.0f));
+
+				// Right-click hit-testing on the level image
+				static int rclick_obj_index     = -1;
+				static uint64_t rclick_win_id   = 0;
+				static char rclick_hex_buf[9]   = "00000000";
+
+				if(ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+					ImVec2 imageMin = ImGui::GetItemRectMin();
+					ImVec2 mousePos = ImGui::GetMousePos();
+					float relX      = (mousePos.x - imageMin.x) / image_scale;
+					float relY      = (mousePos.y - imageMin.y) / image_scale;
+
+					int levelH  = iter->drawer->GetH();
+					int levelZm = iter->drawer->GetZm();
+
+					// Convert pixel coords to cell coords (Y is flipped)
+					float cellX = relX / (float)levelZm;
+					float cellY = (float)levelH - (relY / (float)levelZm);
+
+					// Find topmost (highest index) object whose bounding box contains the click
+					rclick_obj_index = -1;
+					rclick_win_id    = iter->window_id;
+
+					for(int oi = (int)iter->parser->MapObj.size() - 1; oi >= 0; oi--) {
+						auto& obj    = iter->parser->MapObj[oi];
+						float objCX  = obj.X / 160.0f;
+						float objCY  = obj.Y / 160.0f;
+						float halfW  = obj.W / 2.0f;
+						float left   = objCX - halfW;
+						float right  = objCX + halfW;
+						float bottom = objCY;
+						float top    = objCY + obj.H;
+
+						// Use minimum 1-cell bounding box for small objects
+						if(right - left < 1.0f) {
+							left  = objCX - 0.5f;
+							right = objCX + 0.5f;
+						}
+						if(top - bottom < 1.0f) {
+							top = bottom + 1.0f;
+						}
+
+						if(cellX >= left && cellX <= right && cellY >= bottom && cellY <= top) {
+							rclick_obj_index = oi;
+							break;
+						}
+					}
+
+					if(rclick_obj_index != -1) {
+						auto& obj        = iter->parser->MapObj[rclick_obj_index];
+						uint32_t combined = ((uint16_t)obj.CID << 16) | (uint16_t)obj.ID;
+						snprintf(rclick_hex_buf, sizeof(rclick_hex_buf), "%08X", combined);
+						ImGui::OpenPopup(fmt::format("##obj_edit_{}", iter->window_id).c_str());
+					}
+				}
+
+				// Object edit context menu popup
+				if(ImGui::BeginPopup(fmt::format("##obj_edit_{}", iter->window_id).c_str())) {
+					if(rclick_obj_index >= 0 && rclick_obj_index < (int)iter->parser->MapObj.size()
+						&& rclick_win_id == iter->window_id) {
+						auto& obj         = iter->parser->MapObj[rclick_obj_index];
+						uint32_t combined = ((uint16_t)obj.CID << 16) | (uint16_t)obj.ID;
+
+						ImGui::Text("[%d] %s", rclick_obj_index, SafeObjName(obj.ID));
+						ImGui::Text("Pos: (%d, %d)  Hex: %08X", obj.X / 160, obj.Y / 160, combined);
+						ImGui::Separator();
+
+						ImGui::SetNextItemWidth(100);
+						ImGui::InputText("ID (hex)", rclick_hex_buf, sizeof(rclick_hex_buf),
+							ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase);
+
+						if(ImGui::Button("Apply")) {
+							uint32_t newVal = (uint32_t)strtoul(rclick_hex_buf, nullptr, 16);
+							int16_t newID   = (int16_t)(newVal & 0xFFFF);
+							int16_t newCID  = (int16_t)((newVal >> 16) & 0xFFFF);
+							iter->parser->ModifyObject(rclick_obj_index, newID, newCID);
+							cached_focused_window_index = -1;
+							ImGui::CloseCurrentPopup();
+							ReRenderWindow(i);
+						}
+						ImGui::SameLine();
+						if(ImGui::Button("Remove")) {
+							iter->parser->RemoveObject(rclick_obj_index);
+							cached_focused_window_index = -1;
+							rclick_obj_index            = -1;
+							ImGui::CloseCurrentPopup();
+							ReRenderWindow(i);
+						}
+					}
+					ImGui::EndPopup();
+				}
 			}
 
 			if(ImGui::IsWindowFocused()) {
