@@ -960,6 +960,9 @@ static void main_loop() {
 				static int rclick_obj_index     = -1;
 				static uint64_t rclick_win_id   = 0;
 				static char rclick_hex_buf[9]   = "00000000";
+				static int rclick_add_cellX     = 0;
+				static int rclick_add_cellY     = 0;
+				static char rclick_add_hex[9]   = "00000000";
 
 				if(ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
 					ImVec2 imageMin = ImGui::GetItemRectMin();
@@ -1008,6 +1011,11 @@ static void main_loop() {
 						uint32_t combined = ((uint16_t)obj.CID << 16) | (uint16_t)obj.ID;
 						snprintf(rclick_hex_buf, sizeof(rclick_hex_buf), "%08X", combined);
 						ImGui::OpenPopup(fmt::format("##obj_edit_{}", iter->window_id).c_str());
+					} else {
+						rclick_add_cellX = (int)cellX;
+						rclick_add_cellY = (int)cellY;
+						rclick_add_hex[0] = '\0';
+						ImGui::OpenPopup(fmt::format("##obj_add_{}", iter->window_id).c_str());
 					}
 				}
 
@@ -1042,6 +1050,36 @@ static void main_loop() {
 							rclick_obj_index            = -1;
 							ImGui::CloseCurrentPopup();
 							ReRenderWindow(i);
+						}
+					}
+					ImGui::EndPopup();
+				}
+
+				// Add object popup (right-click on empty space)
+				if(ImGui::BeginPopup(fmt::format("##obj_add_{}", iter->window_id).c_str())) {
+					if(rclick_win_id == iter->window_id) {
+						ImGui::Text("Add Object at (%d, %d)", rclick_add_cellX, rclick_add_cellY);
+						ImGui::Separator();
+
+						ImGui::SetNextItemWidth(100);
+						ImGui::InputText("ID (hex)", rclick_add_hex, sizeof(rclick_add_hex),
+							ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsUppercase);
+
+						bool hasInput = rclick_add_hex[0] != '\0';
+						if(hasInput) {
+							uint32_t addVal = (uint32_t)strtoul(rclick_add_hex, nullptr, 16);
+							int16_t addID   = (int16_t)(addVal & 0xFFFF);
+							ImGui::Text("Object: %s", SafeObjName(addID));
+
+							if(ImGui::Button("Add")) {
+								int16_t addCID  = (int16_t)((addVal >> 16) & 0xFFFF);
+								int32_t objX    = rclick_add_cellX * 160;
+								int32_t objY    = rclick_add_cellY * 160;
+								iter->parser->AddObject(objX, objY, addID, addCID);
+								cached_focused_window_index = -1;
+								ImGui::CloseCurrentPopup();
+								ReRenderWindow(i);
+							}
 						}
 					}
 					ImGui::EndPopup();
