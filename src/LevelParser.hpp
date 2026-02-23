@@ -226,7 +226,7 @@ public:
 	static constexpr size_t OBJ_CID_OFFSET     = 0x1A;
 	static constexpr size_t OBJ_X_OFFSET       = 0x00;
 	static constexpr size_t OBJ_Y_OFFSET       = 0x04;
-	static constexpr size_t MAP_OBJ_COUNT_OFFSET = 0x20;
+	static constexpr size_t MAP_OBJ_COUNT_OFFSET = 0x1C;
 	static constexpr size_t MAP_SIZE           = 0x2DEE0;
 
 	LevelParser();

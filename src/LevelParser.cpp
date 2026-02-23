@@ -77,8 +77,14 @@ void LevelParser::AddObject(int32_t x, int32_t y, int16_t id, int16_t cid) {
 	// width=1, height=1 at offsets 0x0A, 0x0B
 	rawLevelData[objOffset + 0x0A] = 1;
 	rawLevelData[objOffset + 0x0B] = 1;
+	// Default flag for a placed object
+	int32_t defaultFlag = 0x6000040;
+	memcpy(&rawLevelData[objOffset + 0x0C], &defaultFlag, 4);
 	memcpy(&rawLevelData[objOffset + OBJ_ID_OFFSET], &id, 2);
 	memcpy(&rawLevelData[objOffset + OBJ_CID_OFFSET], &cid, 2);
+	// LID = -1 means unlinked
+	int16_t defaultLid = -1;
+	memcpy(&rawLevelData[objOffset + 0x1C], &defaultLid, 2);
 
 	// Add to parsed objects
 	MapObject newObj;
@@ -86,8 +92,10 @@ void LevelParser::AddObject(int32_t x, int32_t y, int16_t id, int16_t cid) {
 	newObj.Y             = y;
 	newObj.W             = 1;
 	newObj.H             = 1;
+	newObj.Flag          = defaultFlag;
 	newObj.ID            = id;
 	newObj.CID           = cid;
+	newObj.LID           = -1;
 	newObj.OriginalIndex = newOriginalIndex;
 	MapObj.push_back(newObj);
 }
